@@ -122,27 +122,32 @@ export default function App() {
   }, [key, order, attempts, status])
 
   // FLIP: when the order changes, slide each card from its old spot to its
-  // new one instead of teleporting.
-  const prevRects = useRef(new Map())
+  // new one instead of teleporting. Deltas are computed from offsetTop
+  // (layout position), never getBoundingClientRect — mid-animation rects
+  // include the in-flight transform, which compounds into runaway offsets
+  // when reorders happen faster than the animation finishes. The current
+  // animated offset is read separately and carried over so a card that
+  // changes direction mid-slide turns around smoothly.
+  const prevTops = useRef(new Map())
   useLayoutEffect(() => {
     const next = new Map()
     for (const e of order) {
       const el = itemRefs.current[e.id]
       if (!el) continue
-      const rect = el.getBoundingClientRect()
-      next.set(e.id, rect)
-      const old = prevRects.current.get(e.id)
-      if (old && Math.abs(old.top - rect.top) > 1) {
-        const dy = old.top - rect.top
+      const newTop = el.offsetTop
+      next.set(e.id, newTop)
+      const oldTop = prevTops.current.get(e.id)
+      if (oldTop !== undefined && Math.abs(oldTop - newTop) > 1) {
+        const t = getComputedStyle(el).transform
+        const curY = t === 'none' ? 0 : new DOMMatrixReadOnly(t).m42
         el.style.transition = 'none'
-        el.style.transform = `translateY(${dy}px)`
-        requestAnimationFrame(() => {
-          el.style.transition = 'transform 200ms cubic-bezier(0.2, 0, 0.2, 1)'
-          el.style.transform = ''
-        })
+        el.style.transform = `translateY(${oldTop - newTop + curY}px)`
+        el.getBoundingClientRect() // force reflow so the transition starts from here
+        el.style.transition = 'transform 250ms ease'
+        el.style.transform = ''
       }
     }
-    prevRects.current = next
+    prevTops.current = next
   }, [order])
 
   // Nearest unlocked slot to the pointer's y position. Uses offsetTop (layout
