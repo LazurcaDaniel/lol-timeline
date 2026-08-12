@@ -67,7 +67,9 @@ header .sub {
   padding: 12px 14px;
   cursor: grab;
   user-select: none;
-  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+  -webkit-user-select: none;
+  touch-action: none;
+  transition: border-color 0.15s, background 0.15s;
 }
 
 .card:hover {
@@ -97,6 +99,36 @@ header .sub {
 
 .card.missed {
   border-color: #7a3a48;
+}
+
+/* In-list placeholder for the card being dragged */
+.card.ghost {
+  opacity: 0.35;
+  border-style: dashed;
+  border-color: var(--blue);
+}
+
+/* Floating copy of the card that follows the pointer */
+.drag-clone {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 100;
+  pointer-events: none;
+  background: var(--bg-card-hover);
+  border-color: var(--blue);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  rotate: 1.5deg;
+  scale: 1.03;
+  transition: rotate 0.15s, scale 0.15s;
+}
+
+/* Glide into the slot on release */
+.drag-clone.dropping {
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0.2, 1), rotate 0.2s, scale 0.2s;
+  rotate: 0deg;
+  scale: 1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .slot {

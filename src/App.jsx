@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { EVENTS } from './data/events.js'
 import {
   MAX_ATTEMPTS,
@@ -13,6 +13,7 @@ import {
 
 const STATS_KEY = 'loltl-stats'
 const dayStateKey = (key) => `loltl-day-${key}`
+const DRAG_THRESHOLD = 6 // px of movement before a press becomes a drag
 
 function loadJSON(key, fallback) {
   try {
@@ -31,6 +32,22 @@ function saveJSON(key, value) {
   }
 }
 
+// Move the card at `from` so it lands at position `to`, shifting the cards in
+// between. Locked positions keep their cards; only unlocked slots take part.
+function moveWithLocks(arr, from, to, locked) {
+  if (from === to) return arr
+  const slots = arr.map((_, i) => i).filter((i) => !locked[i])
+  const items = slots.map((i) => arr[i])
+  const fromRank = slots.indexOf(from)
+  const toRank = slots.indexOf(to)
+  if (fromRank === -1 || toRank === -1) return arr
+  const [moved] = items.splice(fromRank, 1)
+  items.splice(toRank, 0, moved)
+  const next = arr.slice()
+  slots.forEach((slot, rank) => (next[slot] = items[rank]))
+  return next
+}
+
 function useCountdown(active) {
   const [ms, setMs] = useState(msUntilTomorrow())
   useEffect(() => {
@@ -42,6 +59,21 @@ function useCountdown(active) {
   const m = String(Math.floor((ms % 3600000) / 60000)).padStart(2, '0')
   const s = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')
   return `${h}:${m}:${s}`
+}
+
+function CardInner({ event, slot, showDate, grip, lockedCheck }) {
+  return (
+    <>
+      <span className="slot">{slot}</span>
+      <div className="body">
+        <div className="title">{event.title}</div>
+        <div className="desc">{event.desc}</div>
+        {showDate && <div className="date">{formatDate(event.date)}</div>}
+      </div>
+      {grip && <span className="grip">⠿</span>}
+      {lockedCheck && <span className="check">✓</span>}
+    </>
+  )
 }
 
 export default function App() {
@@ -60,7 +92,7 @@ export default function App() {
   const [attempts, setAttempts] = useState(() => saved?.attempts ?? [])
   const [status, setStatus] = useState(() => saved?.status ?? 'playing')
   const [selected, setSelected] = useState(null)
-  const [dragFrom, setDragFrom] = useState(null)
+  const [drag, setDrag] = useState(null)
   const [copied, setCopied] = useState(false)
   const [stats, setStats] = useState(() =>
     loadJSON(STATS_KEY, { played: 0, wins: 0, streak: 0, maxStreak: 0, lastKey: null })
@@ -76,6 +108,10 @@ export default function App() {
     return l
   }, [attempts, order.length])
 
+  const itemRefs = useRef({})
+  const orderRef = useRef(order)
+  orderRef.current = order
+
   useEffect(() => {
     saveJSON(dayStateKey(key), {
       order: order.map((e) => e.id),
@@ -84,28 +120,131 @@ export default function App() {
     })
   }, [key, order, attempts, status])
 
-  function swap(i, j) {
-    if (over || locked[i] || locked[j] || i === j) return
-    setOrder((o) => {
-      const next = o.slice()
-      ;[next[i], next[j]] = [next[j], next[i]]
-      return next
+  // FLIP: when the order changes, slide each card from its old spot to its
+  // new one instead of teleporting.
+  const prevRects = useRef(new Map())
+  useLayoutEffect(() => {
+    const next = new Map()
+    for (const e of order) {
+      const el = itemRefs.current[e.id]
+      if (!el) continue
+      const rect = el.getBoundingClientRect()
+      next.set(e.id, rect)
+      const old = prevRects.current.get(e.id)
+      if (old && Math.abs(old.top - rect.top) > 1) {
+        const dy = old.top - rect.top
+        el.style.transition = 'none'
+        el.style.transform = `translateY(${dy}px)`
+        requestAnimationFrame(() => {
+          el.style.transition = 'transform 200ms cubic-bezier(0.2, 0, 0.2, 1)'
+          el.style.transform = ''
+        })
+      }
+    }
+    prevRects.current = next
+  }, [order])
+
+  // Nearest unlocked slot to the pointer's y position.
+  function slotAt(y) {
+    let best = null
+    let bestDist = Infinity
+    orderRef.current.forEach((e, i) => {
+      if (locked[i]) return
+      const el = itemRefs.current[e.id]
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      const d = Math.abs(y - (r.top + r.height / 2))
+      if (d < bestDist) {
+        bestDist = d
+        best = i
+      }
     })
+    return best
   }
 
-  function handleCardClick(i) {
-    if (over || locked[i]) return
-    if (selected === null) setSelected(i)
-    else {
-      swap(selected, i)
-      setSelected(null)
+  function handlePointerDown(e, index) {
+    if (over || locked[index] || (e.pointerType === 'mouse' && e.button !== 0)) return
+    e.preventDefault()
+    const card = orderRef.current[index]
+    const rect = itemRefs.current[card.id].getBoundingClientRect()
+    const press = {
+      id: card.id,
+      index,
+      startX: e.clientX,
+      startY: e.clientY,
+      offX: e.clientX - rect.left,
+      offY: e.clientY - rect.top,
+      width: rect.width,
+      started: false,
     }
+
+    const onMove = (ev) => {
+      const dx = ev.clientX - press.startX
+      const dy = ev.clientY - press.startY
+      if (!press.started) {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return
+        press.started = true
+        setSelected(null)
+      }
+      const target = slotAt(ev.clientY)
+      if (target !== null && target !== press.index) {
+        setOrder((o) => moveWithLocks(o, press.index, target, locked))
+        press.index = target
+      }
+      setDrag({
+        id: press.id,
+        width: press.width,
+        x: ev.clientX - press.offX,
+        y: ev.clientY - press.offY,
+        slot: press.index + 1,
+        dropping: false,
+      })
+    }
+
+    const onUp = () => {
+      cleanup()
+      if (!press.started) {
+        handleTap(press.index)
+        return
+      }
+      // Glide the floating clone into its slot, then remove it.
+      const el = itemRefs.current[press.id]
+      if (el) {
+        const rect = el.getBoundingClientRect()
+        setDrag((d) =>
+          d ? { ...d, x: rect.left, y: rect.top, dropping: true } : d
+        )
+        setTimeout(() => setDrag(null), 200)
+      } else {
+        setDrag(null)
+      }
+    }
+
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+
+  // Tap flow: tap a card to pick it up, tap another slot to move it there.
+  function handleTap(index) {
+    if (over || locked[index]) return
+    setSelected((sel) => {
+      if (sel === null) return index
+      if (sel !== index) setOrder((o) => moveWithLocks(o, sel, index, locked))
+      return null
+    })
   }
 
   function finish(won) {
     setStatus(won ? 'won' : 'lost')
     setStats((prev) => {
-      const consecutive = prev.lastKey != null && puzzleNumberFromKey(prev.lastKey) === number - 1
+      const consecutive =
+        prev.lastKey != null && puzzleNumberFromKey(prev.lastKey) === number - 1
       const streak = won ? (consecutive ? prev.streak + 1 : 1) : 0
       const next = {
         played: prev.played + 1,
@@ -157,13 +296,15 @@ export default function App() {
         </h1>
         <p className="sub">
           Puzzle #{number} · Order the moments from <strong>earliest (top)</strong> to{' '}
-          <strong>latest (bottom)</strong>. Drag cards or tap two to swap.{' '}
-          {MAX_ATTEMPTS} tries — correct spots lock in green.
+          <strong>latest (bottom)</strong>. Drag a card where it belongs — or tap
+          it, then tap its new slot. {MAX_ATTEMPTS} tries, correct spots lock in
+          green.
         </p>
       </header>
 
       <ol className="cards">
         {order.map((e, i) => {
+          const dragging = drag && drag.id === e.id
           const state = over
             ? status === 'won' || e.id === solution[i].id
               ? 'correct'
@@ -178,28 +319,33 @@ export default function App() {
           return (
             <li
               key={e.id}
-              className={`card ${state}`}
-              draggable={!over && !locked[i]}
-              onDragStart={() => setDragFrom(i)}
-              onDragOver={(ev) => ev.preventDefault()}
-              onDrop={() => {
-                if (dragFrom !== null) swap(dragFrom, i)
-                setDragFrom(null)
-              }}
-              onClick={() => handleCardClick(i)}
+              ref={(el) => (itemRefs.current[e.id] = el)}
+              className={`card ${state} ${dragging ? 'ghost' : ''}`}
+              onPointerDown={(ev) => handlePointerDown(ev, i)}
             >
-              <span className="slot">{i + 1}</span>
-              <div className="body">
-                <div className="title">{e.title}</div>
-                <div className="desc">{e.desc}</div>
-                {over && <div className="date">{formatDate(e.date)}</div>}
-              </div>
-              {!over && !locked[i] && <span className="grip">⠿</span>}
-              {locked[i] && !over && <span className="check">✓</span>}
+              <CardInner
+                event={e}
+                slot={i + 1}
+                showDate={over}
+                grip={!over && !locked[i]}
+                lockedCheck={locked[i] && !over}
+              />
             </li>
           )
         })}
       </ol>
+
+      {drag && (
+        <div
+          className={`card drag-clone ${drag.dropping ? 'dropping' : ''}`}
+          style={{
+            width: drag.width,
+            transform: `translate(${drag.x}px, ${drag.y}px)`,
+          }}
+        >
+          <CardInner event={byId[drag.id]} slot={drag.slot} grip />
+        </div>
+      )}
 
       <div className="attempts">
         {attempts.map((row, i) => (
@@ -211,7 +357,8 @@ export default function App() {
         ))}
         {!over && (
           <div className="tries-left">
-            {MAX_ATTEMPTS - attempts.length} {MAX_ATTEMPTS - attempts.length === 1 ? 'try' : 'tries'} left
+            {MAX_ATTEMPTS - attempts.length}{' '}
+            {MAX_ATTEMPTS - attempts.length === 1 ? 'try' : 'tries'} left
           </div>
         )}
       </div>
