@@ -109,6 +109,7 @@ export default function App() {
   }, [attempts, order.length])
 
   const itemRefs = useRef({})
+  const listRef = useRef(null)
   const orderRef = useRef(order)
   orderRef.current = order
 
@@ -144,16 +145,21 @@ export default function App() {
     prevRects.current = next
   }, [order])
 
-  // Nearest unlocked slot to the pointer's y position.
-  function slotAt(y) {
+  // Nearest unlocked slot to the pointer's y position. Uses offsetTop (layout
+  // position) rather than getBoundingClientRect so cards that are still
+  // mid-animation don't feed their in-flight visual position back into the
+  // slot math — that caused reorders to immediately bounce back.
+  function slotAt(clientY) {
+    const list = listRef.current
+    if (!list) return null
+    const y = clientY - list.getBoundingClientRect().top
     let best = null
     let bestDist = Infinity
     orderRef.current.forEach((e, i) => {
       if (locked[i]) return
       const el = itemRefs.current[e.id]
       if (!el) return
-      const r = el.getBoundingClientRect()
-      const d = Math.abs(y - (r.top + r.height / 2))
+      const d = Math.abs(y - (el.offsetTop + el.offsetHeight / 2))
       if (d < bestDist) {
         bestDist = d
         best = i
@@ -207,12 +213,17 @@ export default function App() {
         handleTap(press.index)
         return
       }
-      // Glide the floating clone into its slot, then remove it.
+      // Glide the floating clone into its slot, then remove it. The target is
+      // computed from layout geometry (offsetTop), not the ghost's visual
+      // rect, which may still be mid-animation.
       const el = itemRefs.current[press.id]
-      if (el) {
-        const rect = el.getBoundingClientRect()
+      const list = listRef.current
+      if (el && list) {
+        const lr = list.getBoundingClientRect()
         setDrag((d) =>
-          d ? { ...d, x: rect.left, y: rect.top, dropping: true } : d
+          d
+            ? { ...d, x: lr.left + el.offsetLeft, y: lr.top + el.offsetTop, dropping: true }
+            : d
         )
         setTimeout(() => setDrag(null), 200)
       } else {
@@ -302,7 +313,7 @@ export default function App() {
         </p>
       </header>
 
-      <ol className="cards">
+      <ol className="cards" ref={listRef}>
         {order.map((e, i) => {
           const dragging = drag && drag.id === e.id
           const state = over

@@ -51,6 +51,7 @@ header .sub {
 
 .cards {
   list-style: none;
+  position: relative; /* so card offsetTop/offsetLeft are relative to the list */
   margin-top: 20px;
   display: flex;
   flex-direction: column;
