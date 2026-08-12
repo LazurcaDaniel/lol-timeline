@@ -194,7 +194,10 @@ export default function App() {
       }
       const target = slotAt(ev.clientY)
       if (target !== null && target !== press.index) {
-        setOrder((o) => moveWithLocks(o, press.index, target, locked))
+        // Capture the from-index now: the updater runs after this handler
+        // returns, by which time press.index has already been reassigned.
+        const from = press.index
+        setOrder((o) => moveWithLocks(o, from, target, locked))
         press.index = target
       }
       setDrag({
@@ -244,11 +247,15 @@ export default function App() {
   // Tap flow: tap a card to pick it up, tap another slot to move it there.
   function handleTap(index) {
     if (over || locked[index]) return
-    setSelected((sel) => {
-      if (sel === null) return index
-      if (sel !== index) setOrder((o) => moveWithLocks(o, sel, index, locked))
-      return null
-    })
+    if (selected === null) {
+      setSelected(index)
+      return
+    }
+    if (selected !== index) {
+      const from = selected
+      setOrder((o) => moveWithLocks(o, from, index, locked))
+    }
+    setSelected(null)
   }
 
   function finish(won) {
