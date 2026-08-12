@@ -4,7 +4,7 @@
 const MS_PER_DAY = 86400000
 // Two events closer together than this can't appear in the same puzzle,
 // so the ordering is never ambiguous or unfairly hard.
-const MIN_GAP_DAYS = 45
+export const MIN_GAP_DAYS = 45
 export const MAX_ATTEMPTS = 3
 export const PUZZLE_SIZE = 5
 
